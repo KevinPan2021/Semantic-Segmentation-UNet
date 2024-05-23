@@ -1,28 +1,27 @@
 import os
-import numpy as np
 from PIL import Image
 import torch
-from torch.utils.data import DataLoader, TensorDataset
-from tqdm import tqdm
+from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import pickle
-import time
-import threading
 import random
+import numpy as np
 
 # system packages
-from model import UNet
+from unet import UNet
 from training import model_training, feedforward
 from visualization import plot_image_mask
 
 
 
-# supports MacOS mps and CUDA
-def GPU_Device():
+# supports CUDA and MPS
+def compute_device():
     if torch.cuda.is_available():
         return 'cuda'
     elif torch.backends.mps.is_available():
         return 'mps'
+    else:
+        return 'cpu'
 
 
 # bidirectional dictionary
@@ -46,8 +45,70 @@ class BidirectionalMap:
 
 
 
+# custom dataset class, read images from folder
+class SegDataset(Dataset):
+    def __init__(self, img_path, class_ind_pair, transform, aug=False):
+        self.img_path = img_path
+        self.class_ind_pair = class_ind_pair
+        self.transform = transform
+        self.aug = aug
+                
+    def __len__(self):
+        return len(self.img_path)
+    
+    
+    # convert without normalization and convert to long
+    def label_to_tensor(self, img):
+        np_img = np.array(img)
+        tensor_img = torch.from_numpy(np_img).long()
+        return tensor_img
+    
+    
+    def __getitem__(self, idx):
+        img_dir = self.img_path[idx]
+        
+        # reading RGB image and label
+        img = Image.open(img_dir).convert('RGB')
+        label = Image.open(img_dir.replace('CameraRGB', 'CameraSeg')).split()[0]
+        
+        # apply transformation
+        img = self.transform['img'](img)
+        label = self.transform['label'](label)
+        
+        # convert label to tensor
+        label = self.label_to_tensor(label)
+        
+        # data augmentation (randomly flip p=0.5)
+        if self.aug:
+            if random.choice([0, 1]) == 1:
+                img = torch.flip(img, dims=(-1,))
+                label = torch.flip(label, dims=(-1,))
+        
+        return img, label
+    
+    
+
+# return the image and label transformation
+def get_transform():
+    img_transform = transforms.Compose([
+        transforms.Resize((432, 576)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    label_transform = transforms.Compose([
+        transforms.Resize((432, 576))
+    ])
+    return {'img':img_transform, 'label':label_transform}
+
+
+
 # predict the mask of a sigle image
-def inference(model, device, img):
+@torch.no_grad
+def inference(model, img):
+    model.eval()
+    
+    device = next(model.parameters()).device
+    
     # move data to GPU
     data = img.to(device)
     
@@ -55,128 +116,20 @@ def inference(model, device, img):
     data = data.unsqueeze(0)
     
     # model inference
-    with torch.no_grad():  # Disable gradient calculation
-        output = model(data).cpu()
-    _, predicted = torch.max(output.data, 1)
+    output = model(data).cpu()
+    _, pred = torch.max(output.data, 1)
     
-    return predicted
+    return pred
     
-    
-# reading image using parallel processing
-def parallel_read_images(path, X, transform, num_threads=8):
-    
-    def read_image(path, data, transform, start_idx, end_idx):
-        for img_file in os.listdir(path)[start_idx:end_idx]:
-            if img_file.endswith('DS_Store'):
-                continue
-            img = Image.open(os.path.join(path, img_file)).convert('RGB')
-            data[f"{path.split('/')[-2]}_{img_file}"] = transform(img)
 
-    # Split the data indices into equal parts for each thread
-    total_size = len(os.listdir(path))
-    chunk_size = total_size // num_threads
-    chunks = [(i * chunk_size, (i + 1) * chunk_size) for i in range(num_threads)]
-    chunks[-1] = (chunks[-1][0], total_size)  # Adjust the last chunk to include remaining indices
-
-    threads = []
-    for start_idx, end_idx in chunks:
-        thread = threading.Thread(target=read_image, args=(path, X, transform, start_idx, end_idx))
-        thread.start()
-        threads.append(thread)
-
-    # Wait for all threads to complete
-    for thread in threads:
-        thread.join()
-
-    return X
-        
-        
-
-# reading image using parallel processing
-def parallel_read_masks(path, Y, transform, num_threads=8):
-    
-    def read_mask(path, data, transform, start_idx, end_idx):
-        for label_file in os.listdir(path)[start_idx:end_idx]:
-            if label_file.endswith('DS_Store'):
-                continue
-            label = Image.open(os.path.join(path, label_file)).split()[0]
-            #data.append(transform(label))
-            data[f"{path.split('/')[-2]}_{label_file}"] = transform(label)
-
-    # Split the data indices into equal parts for each thread
-    total_size = len(os.listdir(path))
-    chunk_size = total_size // num_threads
-    chunks = [(i * chunk_size, (i + 1) * chunk_size) for i in range(num_threads)]
-    chunks[-1] = (chunks[-1][0], total_size)  # Adjust the last chunk to include remaining indices
-
-    threads = []
-    for start_idx, end_idx in chunks:
-        thread = threading.Thread(target=read_mask, args=(path, Y, transform, start_idx, end_idx))
-        thread.start()
-        threads.append(thread)
-
-    # Wait for all threads to complete
-    for thread in threads:
-        thread.join()
-
-    return Y
-
-
-    
-# convert from numpy array to pytorch tensor object
-def convert_to_tensor(X, Y):
-    X = torch.stack(X)
-    Y = torch.stack(Y)
-    return X, Y
-
-
-
-def train_test_split(X, Y, thres):
-    thres = sorted(thres) # threshold must be in ascending order
-    # preform train-valid-test split
-    if len(thres) == 2:
-        trainX = X[:int(thres[0] * len(X))]
-        trainY = Y[:int(thres[0] * len(Y))]
-        
-        validX = X[int(thres[0] * len(X)):int(thres[1] * len(X))]
-        validY = Y[int(thres[0] * len(X)):int(thres[1] * len(Y))]
-        
-        testX = X[int(thres[1] * len(X)):]
-        testY = Y[int(thres[1] * len(Y)):]
-    
-        del X, Y
-        return trainX, trainY, validX, validY, testX, testY
-    
-    # preform train-test split
-    elif len(thres) == 1:
-        trainX = X[:int(thres[0] * len(X))]
-        trainY = Y[:int(thres[0] * len(Y))]
-        
-        testX = X[int(thres[0] * len(X)):]
-        testY = Y[int(thres[0] * len(Y)):]
-    
-        del X, Y
-        return trainX, trainY, testX, testY
-    
-    
-    
-# Concatenate original and flipped data
-def data_augmentation(X, Y):
-    X = torch.cat([X, torch.flip(X, dims=(3,))])
-    Y = torch.cat([Y, torch.flip(Y, dims=(3,))])
-    return X, Y
-    
 
 def main():
-    start_time = time.time()
-    
-    # dataset directory
-    dataset = '../Datasets/Semantic Segmentation for Self Driving Cars'
-    
     # class label to indices mapping
     class_ind_pair = BidirectionalMap()
-    classes = ['Unlabeled','Building','Fence','Other','Pedestrian', 'Pole', 'Roadline', 
-               'Road','Sidewalk', 'Vegetation', 'Car','Wall','Traffic sign']
+    classes = [
+        'Unlabeled','Building','Fence','Other','Pedestrian', 'Pole', 'Roadline', 
+        'Road','Sidewalk', 'Vegetation', 'Car','Wall', 'Traffic sign'
+    ]
     nclasses = len(classes)
     for ind, name in enumerate(classes):
         class_ind_pair.add_mapping(ind, name)
@@ -184,81 +137,65 @@ def main():
     with open("class_ind_pair.pkl", "wb") as f:
         pickle.dump(class_ind_pair, f)
     
-    # image transform
-    img_transform = transforms.Compose([
-        transforms.Resize((288, 384)), # original shape 600*800
-        transforms.ToTensor(),
-    ])
-    mask_transform = transforms.Compose([
-        transforms.Resize((288, 384)),# original shape 600*800
-        transforms.Lambda(lambda img: torch.from_numpy(np.array(img)).long())
-    ])
-    
-    # reading data and masks
-    X_map, Y_map = dict(), dict() # use dictionary to ignore threading breaking order
-    for folder in tqdm(os.listdir(dataset)):
-        if folder.endswith('DS_Store') or folder.endswith('.md'):
+    # get all image paths
+    image_path = []
+    dataset = '../Datasets/Semantic Segmentation for Self Driving Cars'
+    for root, dirs, files in os.walk(dataset):
+        if not 'CameraRGB' in root:
             continue
-        parallel_read_images(f'{dataset}/{folder}/CameraRGB', X_map, img_transform)
-        parallel_read_masks(f'{dataset}/{folder}/CameraSeg', Y_map, mask_transform)
+        for file in files:
+            if file.endswith('.png'):
+                image_path.append(os.path.join(root, file))
     
-    # shuffle the dataset and pair X and Y
-    X, Y = [], []
-    shuffled_keys = list(X_map.keys())
+    # train-valid-test split on image paths
     random.seed(42)
-    random.shuffle(shuffled_keys)
-    for key in shuffled_keys:
-        X.append(X_map[key])
-        Y.append(Y_map[key])
-    del X_map, Y_map
+    random.shuffle(image_path)
+    train_path = image_path[:int(0.8*len(image_path))]
+    val_path = image_path[int(0.8*len(image_path)):int(0.9*len(image_path))]
+    test_path = image_path[int(0.9*len(image_path)):]
+    random.seed() # remove seed
     
-    # visualizing data and mask
-    for i in range(0, len(X), 1000):
-        plot_image_mask(X[i], Y[i], nclasses)
-    
-
-    # convert to tensor
-    X, Y = convert_to_tensor(X, Y)
-    print('done converting to tensor')
-    
-    # train-test split
-    trainX, trainY, validX, validY, testX, testY = train_test_split(X, Y, [0.8, 0.9])
-    print('done train/test split')
-    
-    # data augmentation on train data
-    #trainX, trainY = data_augmentation(trainX, trainY)
-    print('done data augmentation')
+    # create dataset
+    train_dataset = SegDataset(train_path, class_ind_pair, get_transform(), aug=True)
+    val_dataset = SegDataset(val_path, class_ind_pair, get_transform())
+    test_dataset = SegDataset(test_path, class_ind_pair, get_transform())
     
     # convert to loader object
-    train_loader = DataLoader(TensorDataset(trainX, trainY), batch_size=16, shuffle=True)
-    valid_loader = DataLoader(TensorDataset(validX, validY), batch_size=16, shuffle=True)
-    del trainX, trainY, validX, validY
-    print('done convert to data loader')
+    train_loader = DataLoader(
+        train_dataset, batch_size=4, num_workers=4, pin_memory=True, 
+        persistent_workers=True, shuffle=True
+    )
+    valid_loader = DataLoader(
+        val_dataset, batch_size=8, num_workers=4, pin_memory=True, 
+        persistent_workers=True, shuffle=False
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=8, num_workers=4, pin_memory=True, 
+        persistent_workers=True, shuffle=False
+    )
     
+    # visualizing some examples
+    for i in range(0, len(train_dataset), (len(train_dataset)-1)//5):
+        x, y = train_dataset[i]
+        plot_image_mask(nclasses, x, y)
+        
     # define model
     model = UNet(3, nclasses)
-    model = model.to(GPU_Device())
+    model = model.to(compute_device())
     
     # model training
-    model_training(model, nclasses, train_loader, valid_loader, GPU_Device())
-    print('done training')
+    model_training(model, train_loader, valid_loader)
     
     # loading the best preforming model
     model.load_state_dict(torch.load(f'{type(model).__name__}.pth'))
-    print('done loading best model')
     
     # model test preformance
-    test_loader = DataLoader(TensorDataset(testX, testY), batch_size=16, shuffle=True)
-    test_acc, test_MIoU, test_loss = feedforward(model, nclasses, test_loader, GPU_Device())
-    print(f'Test Loss: {test_loss:.3f} | MIoU: {test_MIoU:.2f}%| Acc: {test_acc:.2f}%')
-    
-    # visualizing the test results
-    for i in range(0, len(testX), 100):
-        predicted = inference(model, GPU_Device(), testX[i])
-        plot_image_mask(testX[i], testY[i], nclasses, predicted)
-    del testX, testY
-    
-    print('took', time.time() - start_time)
+    feedforward(model, test_loader)
+    for i in range(0, len(test_dataset), (len(test_dataset)-1)//5):
+        x, y = test_dataset[i]
+        pred = inference(model, x)
+        plot_image_mask(nclasses, x, y, pred)
+        
     
     
 if __name__ == "__main__":

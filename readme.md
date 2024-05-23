@@ -9,14 +9,10 @@ Dataset:
 
 
 Build: 
-	M1 Macbook Pro
-	Miniforge 3 (Python 3.9)
-	PyTorch version: 2.2.1
-
-* Alternative Build:
-	Windows (NIVIDA GPU)
-	Anaconda 3
-	PyTorch
+	NIVIDIA RTX 4060
+	Cuda 12.1
+	Anaconda 3 (Python 3.11)
+	PyTorch version: 2.1.2
 
 
 
@@ -29,7 +25,7 @@ Generate ".py" file from ".ui" file:
 Core Project Structure:
 	GUI.py (Run to generate a GUI)
 	main.py (Run to train model)
-	model.py
+	unet.py
 	qt_main.py
 	training.py
 	visualization.py

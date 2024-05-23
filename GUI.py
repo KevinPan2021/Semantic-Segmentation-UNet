@@ -9,13 +9,12 @@ from matplotlib.colors import LinearSegmentedColormap
 import sys
 import numpy as np
 import pickle
-from torchvision import transforms
 import torch
 from PIL import Image
 
-from model import UNet
+from unet import UNet
 from qt_main import Ui_Application
-from main import BidirectionalMap, GPU_Device, inference
+from main import BidirectionalMap, compute_device, inference, get_transform
 
 
 def dark_JET_cmap():
@@ -35,6 +34,7 @@ def show_message(parent, title, message, icon=QMessageBox.Warning):
         msg_box.exec()
         
 
+
 class QT_Action(Ui_Application, QMainWindow):
     mouse_move_signal = pyqtSignal()
     
@@ -51,7 +51,7 @@ class QT_Action(Ui_Application, QMainWindow):
         self.predicted = None
         self.image = None
         self.model = None
-        self.transform = None
+        self.transform = get_transform()['img']
         with open('class_ind_pair.pkl', 'rb') as f:
             self.class_ind_pair = pickle.load(f)
             
@@ -94,14 +94,8 @@ class QT_Action(Ui_Application, QMainWindow):
             # loading the training model weights
             self.model.load_state_dict(torch.load(f'{self.model_name}.pth'))
             
-            # input image transform
-            self.transform = transforms.Compose([
-                transforms.Resize((288, 384)), # original shape 600*800
-                transforms.ToTensor(),
-            ])
-            
         # move model to GPU
-        self.model = self.model.to(GPU_Device())
+        self.model = self.model.to(compute_device())
         
         self.model.eval() # Set model to evaluation mode
     
@@ -118,7 +112,7 @@ class QT_Action(Ui_Application, QMainWindow):
         if filename is None or filename == '': 
             return
     
-        # selected .oct or .octa files
+        # selected .png files
         if filename.endswith('.png'):
             self.image = Image.open(filename) 
             self.lineEdit_import.setText(filename)
@@ -133,8 +127,7 @@ class QT_Action(Ui_Application, QMainWindow):
         
     def update_display(self):
         if not self.image is None:
-            image = self.transform(self.image).to('cpu').numpy() * 255
-            image = image.transpose(1,2,0).astype(np.uint8)
+            image = np.array(self.image).astype(np.uint8)
             h, w, ch = image.shape
             q_image = QImage(image.data.tobytes(), w, h, ch*w, QImage.Format_RGB888)  # Create QImage
             qpixmap = QPixmap.fromImage(q_image)  # Convert QImage to QPixmap
@@ -150,7 +143,7 @@ class QT_Action(Ui_Application, QMainWindow):
         data = self.transform(self.image)
         
         # inference
-        predicted = inference(self.model, GPU_Device(), data)
+        predicted = inference(self.model, data)
         
         self.predicted = predicted.squeeze().numpy()
         heatmap = self.predicted / len(self.class_ind_pair)

@@ -6,20 +6,20 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1050</width>
-    <height>600</height>
+    <width>1300</width>
+    <height>750</height>
    </rect>
   </property>
   <property name="minimumSize">
    <size>
-    <width>1050</width>
-    <height>600</height>
+    <width>1300</width>
+    <height>750</height>
    </size>
   </property>
   <property name="maximumSize">
    <size>
-    <width>1050</width>
-    <height>600</height>
+    <width>1300</width>
+    <height>750</height>
    </size>
   </property>
   <property name="mouseTracking">
@@ -37,14 +37,14 @@
   <widget class="QWidget" name="centralwidget">
    <property name="minimumSize">
     <size>
-     <width>1050</width>
-     <height>600</height>
+     <width>1300</width>
+     <height>750</height>
     </size>
    </property>
    <property name="maximumSize">
     <size>
-     <width>1050</width>
-     <height>600</height>
+     <width>1300</width>
+     <height>750</height>
     </size>
    </property>
    <property name="mouseTracking">
@@ -62,19 +62,19 @@
          <widget class="QToolButton" name="toolButton_import">
           <property name="minimumSize">
            <size>
-            <width>100</width>
-            <height>38</height>
+            <width>140</width>
+            <height>50</height>
            </size>
           </property>
           <property name="maximumSize">
            <size>
-            <width>100</width>
-            <height>38</height>
+            <width>140</width>
+            <height>50</height>
            </size>
           </property>
           <property name="font">
            <font>
-            <pointsize>14</pointsize>
+            <pointsize>11</pointsize>
            </font>
           </property>
           <property name="styleSheet">
@@ -99,8 +99,19 @@
           <property name="minimumSize">
            <size>
             <width>0</width>
-            <height>30</height>
+            <height>40</height>
            </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <pointsize>7</pointsize>
+           </font>
           </property>
           <property name="styleSheet">
            <string notr="true">QLineEdit {
@@ -129,8 +140,11 @@ QLineEdit:disabled {
            <widget class="QLabel" name="label_3">
             <property name="font">
              <font>
-              <pointsize>16</pointsize>
+              <pointsize>12</pointsize>
              </font>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">color:white;</string>
             </property>
             <property name="text">
              <string>Image</string>
@@ -144,14 +158,14 @@ QLineEdit:disabled {
            <widget class="QLabel" name="label_image">
             <property name="minimumSize">
              <size>
-              <width>500</width>
-              <height>375</height>
+              <width>630</width>
+              <height>520</height>
              </size>
             </property>
             <property name="maximumSize">
              <size>
-              <width>500</width>
-              <height>375</height>
+              <width>630</width>
+              <height>520</height>
              </size>
             </property>
             <property name="autoFillBackground">
@@ -176,8 +190,11 @@ QLineEdit:disabled {
            <widget class="QLabel" name="label_4">
             <property name="font">
              <font>
-              <pointsize>16</pointsize>
+              <pointsize>12</pointsize>
              </font>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">color:white;</string>
             </property>
             <property name="text">
              <string>Segmentation</string>
@@ -191,14 +208,14 @@ QLineEdit:disabled {
            <widget class="QLabel" name="label_heatmap">
             <property name="minimumSize">
              <size>
-              <width>500</width>
-              <height>375</height>
+              <width>630</width>
+              <height>520</height>
              </size>
             </property>
             <property name="maximumSize">
              <size>
-              <width>500</width>
-              <height>375</height>
+              <width>630</width>
+              <height>520</height>
              </size>
             </property>
             <property name="cursor">
@@ -242,6 +259,9 @@ QLineEdit:disabled {
         </item>
         <item>
          <widget class="QLabel" name="label_6">
+          <property name="styleSheet">
+           <string notr="true">color:white;</string>
+          </property>
           <property name="text">
            <string>Model</string>
           </property>
@@ -300,6 +320,9 @@ QComboBox:disabled {
         </item>
         <item>
          <widget class="QLabel" name="label_5">
+          <property name="styleSheet">
+           <string notr="true">color:white;</string>
+          </property>
           <property name="text">
            <string>Prediction</string>
           </property>
@@ -370,19 +393,19 @@ QLineEdit:disabled {
          <widget class="QToolButton" name="toolButton_process">
           <property name="minimumSize">
            <size>
-            <width>100</width>
-            <height>38</height>
+            <width>140</width>
+            <height>50</height>
            </size>
           </property>
           <property name="maximumSize">
            <size>
-            <width>100</width>
-            <height>38</height>
+            <width>140</width>
+            <height>50</height>
            </size>
           </property>
           <property name="font">
            <font>
-            <pointsize>14</pointsize>
+            <pointsize>11</pointsize>
            </font>
           </property>
           <property name="styleSheet">

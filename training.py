@@ -4,9 +4,9 @@ import torch.nn.functional as F
 import torch.optim as optim
 from tqdm import tqdm
 import numpy as np
+from torch.cuda.amp import GradScaler, autocast
 
 from visualization import plot_training_curves
-
 
 
 
@@ -36,158 +36,179 @@ class FocalLoss(nn.Module):
         
        
 # Mean Intersection over Union
-def mean_iou(pred_mask, mask , n_classes=23):
+@torch.no_grad
+def mean_iou(pred_mask, mask, n_classes):
     smooth = 1e-10 # prevent divide by zero
     
-    with torch.no_grad():
-        pred_mask = F.softmax(pred_mask, dim=1)
-        pred_mask = torch.argmax(pred_mask, dim=1)
-        pred_mask = pred_mask.contiguous().view(-1)
-        mask = mask.contiguous().view(-1)
+    pred_mask = F.softmax(pred_mask, dim=1)
+    pred_mask = torch.argmax(pred_mask, dim=1)
+    pred_mask = pred_mask.contiguous().view(-1)
+    mask = mask.contiguous().view(-1)
 
-        iou_per_class = []
-        for clas in range(0, n_classes): #loop per pixel class
-            true_class = pred_mask == clas
-            true_label = mask == clas
+    iou_per_class = []
+    for clas in range(0, n_classes): #loop per pixel class
+        true_class = pred_mask == clas
+        true_label = mask == clas
+        
+        # no label exist
+        if true_label.long().sum().item() == 0: 
+            iou_per_class.append(np.nan)
+        else:
+            intersect = torch.logical_and(true_class, true_label).sum().float().item()
+            union = torch.logical_or(true_class, true_label).sum().float().item()
 
-            if true_label.long().sum().item() == 0: #no exist label in this loop
-                iou_per_class.append(np.nan)
-            else:
-                intersect = torch.logical_and(true_class, true_label).sum().float().item()
-                union = torch.logical_or(true_class, true_label).sum().float().item()
-
-                iou = (intersect+smooth) / (union+smooth) 
-                iou_per_class.append(iou)
-        return np.nanmean(iou_per_class) * 100
+            iou = (intersect+smooth) / (union+smooth) 
+            iou_per_class.append(iou)
+    return np.nanmean(iou_per_class) * 100
     
     
 
 # Mean Pixel Accuracy
+@torch.no_grad
 def mean_pixel_accuracy(output, mask):
-    with torch.no_grad():
-        output = torch.argmax(F.softmax(output, dim=1), dim=1)
-        correct = torch.eq(output, mask).int()
-        accuracy = float(correct.sum()) / float(correct.numel())
-    return accuracy * 100
+    output = torch.argmax(F.softmax(output, dim=1), dim=1)
+    correct = torch.eq(output, mask).int()
+    accuracy = float(correct.sum()) / float(correct.numel()) * 100
+    return accuracy
 
 
 # forward propagation
-def feedforward(model, nclasses, data_loader, GPU_Device):
-    epoch_loss = 0.0
-    epoch_MIoU = 0.0
-    epoch_acc = 0.0
-    
-    # Define loss function
-    #criterion = nn.CrossEntropyLoss()
-    criterion = FocalLoss()
-    
+@torch.no_grad
+def feedforward(model, dataloader):
     # Set model to evaluation mode
     model.eval()
     
-    # Disable gradient computation for evaluation
-    with torch.no_grad():
-        
-        # Iterate over the dataset
-        for X, Y in data_loader:
+    running_acc = 0.0
+    running_loss = 0.0
+    running_MIoU = 0.0
+    
+    # Define loss function
+    criterion = FocalLoss()
+    
+    device = next(model.parameters()).device
+    nclasses = model.nclasses()
+    
+    # Iterate over the dataset
+    with tqdm(total=len(dataloader)) as pbar:
+        for i, (X, Y) in enumerate(dataloader):
             # move to device
-            X = X.to(GPU_Device)
-            Y = Y.to(GPU_Device)
+            X = X.to(device)
+            Y = Y.to(device)
             
-            # Forward pass
-            output = model(X)
-            
-            # compute loss
-            loss = criterion(output, Y)
+            # mixed precision
+            with autocast(dtype=torch.float16):
+                output = model(X)
+                loss = criterion(output, Y)
             
             # compute predicted
             _, predicted = torch.max(output, 1)
             
-            # Update the statistics
-            epoch_loss += loss.item()
-            epoch_MIoU += mean_iou(output, Y, n_classes=nclasses)
-            epoch_acc += mean_pixel_accuracy(output, Y)
-
+            # Update statistics
+            running_loss += loss.item()
+            running_MIoU += mean_iou(output, Y, nclasses)
+            running_acc += mean_pixel_accuracy(output, Y)
+            
+            # Update tqdm description with loss, accuracy, and f1 score
+            pbar.set_postfix({
+                'Loss': running_loss/(i+1), 
+                'Acc': round(running_acc/(i+1),1),
+                'MIoU': round(running_MIoU/(i+1),1)
+            })
+            pbar.update(1)
+            
+            
     # Calculate test accuracy and loss
-    epoch_acc /= len(data_loader)
-    epoch_loss /= len(data_loader)
-    epoch_MIoU /= len(data_loader)
-    return epoch_acc, epoch_MIoU, epoch_loss
-
-
-
-
-def backpropagation(model, nclasses, data_loader, optimizer, scheduler, GPU_Device):
-    epoch_loss = 0.0
-    epoch_MIoU = 0.0
-    epoch_acc = 0.0
+    running_acc /= len(dataloader)
+    running_MIoU /= len(dataloader)
+    running_loss /= len(dataloader)
     
-    # Define loss function
-    #criterion = nn.CrossEntropyLoss()
-    criterion = FocalLoss()
-    
+    return running_acc, running_MIoU, running_loss
+
+
+
+def backpropagation(model, dataloader, optimizer, scaler):
     # Set model to training mode
     model.train()
     
+    running_acc = 0.0
+    running_loss = 0.0
+    running_MIoU = 0.0
+    
+    # Define loss function
+    criterion = FocalLoss()
+    
+    device = next(model.parameters()).device
+    nclasses = model.nclasses()
+    
     # Iterate over the dataset
-    for X, Y in tqdm(data_loader):
-        
-        # move to device
-        X = X.to(GPU_Device)
-        Y = Y.to(GPU_Device)
-        
-        # Forward pass
-        output = model(X)
-        
-        # compute loss
-        loss = criterion(output, Y)
-        
-        # compute predicted
-        _, predicted = torch.max(output, 1)
-        
-        # Update test statistics
-        epoch_loss += loss.item()
-        epoch_MIoU += mean_iou(output, Y, n_classes=nclasses)
-        epoch_acc += mean_pixel_accuracy(output, Y)
-        
-        # Backward pass and optimization
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    with tqdm(total=len(dataloader)) as pbar:
+        for i, (X, Y) in enumerate(dataloader):
+            # move to device
+            X = X.to(device)
+            Y = Y.to(device)
+            
+            # mixed precision
+            with autocast(dtype=torch.float16):
+                output = model(X)    
+                loss = criterion(output, Y)
+            
+            # compute predicted
+            _, predicted = torch.max(output, 1)
+            
+            # Update statistics
+            running_loss += loss.item()
+            running_MIoU += mean_iou(output, Y, nclasses)
+            running_acc += mean_pixel_accuracy(output, Y)
+            
+            # Reset gradients
+            optimizer.zero_grad()
+    
+            # Backpropagate the loss
+            scaler.scale(loss).backward()
+    
+            # Optimization step
+            scaler.step(optimizer)
+    
+            # Updates the scale for next iteration.
+            scaler.update()
+            
+            # Update tqdm description with loss, accuracy, and f1 score
+            pbar.set_postfix({
+                'Loss': running_loss/(i+1), 
+                'Acc': round(running_acc/(i+1),1),
+                'MIoU': round(running_MIoU/(i+1),1)
+            })
+            pbar.update(1)
             
     
-    # Update the learning rate
-    scheduler.step()
-    
     # Calculate test accuracy and loss
-    epoch_acc /= len(data_loader)
-    epoch_loss /= len(data_loader)
-    epoch_MIoU /= len(data_loader)
+    running_acc /= len(dataloader)
+    running_MIoU /= len(dataloader)
+    running_loss /= len(dataloader)
     
-    return epoch_acc, epoch_MIoU, epoch_loss
+    return running_acc, running_MIoU, running_loss
 
    
 
-def model_training(model, nclasses, train_loader, valid_loader, GPU_Device):    
+def model_training(model, train_loader, valid_loader):    
     # Define hyperparameters
-    learning_rate = 0.002
-    weight_decay = 0
-    num_epochs = 50
+    learning_rate = 5e-5
+    n_epochs = 50
     
     # optimizer
-    optimizer = optim.Adam(model.parameters(), weight_decay=weight_decay, lr=learning_rate)
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
     
-    # learning rate scheduler - gradually decrease learning rate over time
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
+    # Creates a GradScaler once at the beginning of training.
+    scaler = GradScaler()
     
-    # calculate the initial statistics (random)
-    train_acc, train_MIoU, train_loss = feedforward(model, nclasses, train_loader, GPU_Device)
-    valid_acc, valid_MIoU, valid_loss = feedforward(model, nclasses, valid_loader, GPU_Device)
-    train_acc_curve, train_loss_curve, train_MIoU_curve = [train_acc], [train_loss], [train_MIoU]
-    valid_acc_curve, valid_loss_curve, valid_MIoU_curve = [valid_acc], [valid_loss], [valid_MIoU]
-    print(f"Epoch 0/{num_epochs}")
-    print(f"Train Loss: {train_loss:.3f} | MIoU: {train_MIoU:.2f}% | Acc: {train_acc:.2f}%")
-    print(f"Valid Loss: {valid_loss:.3f} | MIoU: {valid_MIoU:.2f}%| Acc: {valid_acc:.2f}%")
-          
+    # calculate the initial statistics
+    print(f"Epoch 0/{n_epochs}")
+    train_acc, train_MIoU, train_loss = feedforward(model, train_loader)
+    valid_acc, valid_MIoU, valid_loss = feedforward(model, valid_loader)
+    train_accs, train_losses, train_MIoUs = [train_acc], [train_loss], [train_MIoU]
+    valid_accs, valid_losses, valid_MIoUs = [valid_acc], [valid_loss], [valid_MIoU]
+    
+        
     # Early Stopping criteria
     patience = 3
     not_improved = 0
@@ -195,21 +216,17 @@ def model_training(model, nclasses, train_loader, valid_loader, GPU_Device):
     threshold = 0.01
     
     # Training loop
-    for epoch in range(num_epochs):
-        train_acc, train_MIoU, train_loss = backpropagation(model, nclasses, train_loader, optimizer, scheduler, GPU_Device)
-        valid_acc, valid_MIoU, valid_loss = feedforward(model, nclasses, valid_loader, GPU_Device)
+    for epoch in range(n_epochs):
+        print(f'Epoch {epoch+1}/{n_epochs}')
+        train_acc, train_MIoU, train_loss = backpropagation(model, train_loader, optimizer, scaler)
+        valid_acc, valid_MIoU, valid_loss = feedforward(model, valid_loader)
         
-        train_acc_curve.append(train_acc)
-        train_loss_curve.append(train_loss)
-        train_MIoU_curve.append(train_MIoU)
-        valid_acc_curve.append(valid_acc)
-        valid_loss_curve.append(valid_loss)
-        valid_MIoU_curve.append(valid_MIoU)
-        
-        # Print epoch statistics
-        print(f"Epoch {epoch+1}/{num_epochs}")
-        print(f"Train Loss: {train_loss:.3f} | MIoU: {train_MIoU:.2f}% | Acc: {train_acc:.2f}%")
-        print(f"Valid Loss: {valid_loss:.3f} | MIoU: {valid_MIoU:.2f}%| Acc: {valid_acc:.2f}%")
+        train_accs.append(train_acc)
+        train_losses.append(train_loss)
+        train_MIoUs.append(train_MIoU)
+        valid_accs.append(valid_acc)
+        valid_losses.append(valid_loss)
+        valid_MIoUs.append(valid_MIoU)
         
         # evaluate the current preformance
         if valid_loss < best_valid_loss + threshold:
@@ -224,5 +241,7 @@ def model_training(model, nclasses, train_loader, valid_loader, GPU_Device):
                 break
         
     # plotting the training curves
-    plot_training_curves(train_acc_curve, train_MIoU_curve, train_loss_curve, \
-                         valid_acc_curve, valid_MIoU_curve, valid_loss_curve)
+    plot_training_curves(
+        train_accs, train_MIoUs, train_losses, 
+        valid_accs, valid_MIoUs, valid_losses
+    )
