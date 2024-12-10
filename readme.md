@@ -1,32 +1,47 @@
-Introduction:
-	This project aims to preform self driving Semantic Segmentation with UNet from Scratch.
+# Semantic Segmentation with UNet
+
+This project aims to preform self driving Semantic Segmentation with UNet from Scratch.
+![Segmentation](external/GUI.png)
+
+
+### Dataset: 
+[Kaggle lyft udacity challenge](https://www.kaggle.com/datasets/kumaresanmanickavelu/lyft-udacity-challenge)
+
+
+### Build: 
+
+	CPU: Intel i9-13900H (14 cores)
+	GPU: NVIDIA RTX 4060 (VRAM 8 GB)
+	RAM: 32 GB
+
+
+### Training Curves
+
+<p align="center">
+  <img src="external/loss.png" alt="Loss Curve" width="45%">
+  <img src="external/ACC.png" alt="Acc Curve" width="45%">
+</p>
+
+<p align="center">
+  <img src="external/MIoU.png" alt="New Plot" width="45%">
+</p>
+
+
+### Code Structure:
+```bash
+├── GUI.py (Run to generate a GUI)
+├── main.py (Run to train model)
+├── unet.py
+├── qt_main.ui
+├── training.py
+├── summary.py
+├── visualization.py
+
+```
+
+### Credits:
+	"U-Net: Convolutional Networks for Biomedical Image Segmentation"
 
 
 
-Dataset: 
-	https://www.kaggle.com/datasets/kumaresanmanickavelu/lyft-udacity-challenge
-
-
-
-Build: 
-	NIVIDIA RTX 4060
-	Cuda 12.1
-	Anaconda 3 (Python 3.11)
-	PyTorch version: 2.1.2
-
-
-
-Generate ".py" file from ".ui" file:
-	1) open Terminal. Navigate to directory
-	2) Type "pyuic5 -x qt_main.ui -o qt_main.py"
-
-
-
-Core Project Structure:
-	GUI.py (Run to generate a GUI)
-	main.py (Run to train model)
-	unet.py
-	qt_main.py
-	training.py
-	visualization.py
 	
